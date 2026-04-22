@@ -1,0 +1,13 @@
+# 보안
+secrets.h
+
+# Unity
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+*.meta
+
+# Arduino
+*.bin
+*.elf
