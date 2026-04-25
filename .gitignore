@@ -10,4 +10,5 @@ secrets.h
 
 # Arduino
 *.bin
-*.elf
+*.elf.DS_Store
+.pio/
