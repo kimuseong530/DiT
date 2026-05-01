@@ -1,98 +1,147 @@
 #include <Arduino.h>
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
 
-// ========== 앞R 모터 핀 정의 ==========
-#define BIN1_FR  5
-#define BIN2_FR  17
-#define PWMB_FR  16
+// ⚠️ Wi-Fi / MQTT 설정
+const char* WIFI_SSID     = "여기에_SSID";
+const char* WIFI_PASSWORD = "여기에_PW";
+const char* MQTT_BROKER   = "라즈베리파이_IP";
+const int   MQTT_PORT     = 1883;
 
-// 인코더 핀
-#define ENC_A_FR  21
-#define ENC_B_FR  22
+// TB6612FNG 핀 설정
+#define AIN1 25
+#define AIN2 26
+#define PWMA 27
+#define BIN1 14
+#define BIN2 12
+#define PWMB 13
 
-// LEDC PWM 설정
-#define CH_FR     0
-#define PWM_FREQ  5000
-#define PWM_BIT   8
+// 제스처 임계값
+#define PITCH_FWD    15.0   // Pitch > 15° → 전진
+#define PITCH_BWD   -15.0   // Pitch < -15° → 후진
+#define ROLL_RIGHT   15.0   // Roll > 15° → 우회전
+#define ROLL_LEFT   -15.0   // Roll < -15° → 좌회전
+#define STOP_AZ      0.3    // 양손 az < 0.3 → 정지 (손 위로)
 
-// 인코더 카운트 변수
-volatile long encoderCount = 0;
+#define MOTOR_SPEED 150     // PWM 0~255
 
-// 인코더 인터럽트 함수
-void IRAM_ATTR encoderISR() {
-  if (digitalRead(ENC_B_FR) == HIGH) {
-    encoderCount++;
+// 장갑 데이터 저장
+float left_pitch = 0, left_roll = 0, left_az = 1;
+float right_pitch = 0, right_roll = 0, right_az = 1;
+
+WiFiClient espClient;
+PubSubClient mqtt(espClient);
+
+// ===== 모터 제어 함수 =====
+void motorStop() {
+  digitalWrite(AIN1, LOW); digitalWrite(AIN2, LOW); analogWrite(PWMA, 0);
+  digitalWrite(BIN1, LOW); digitalWrite(BIN2, LOW); analogWrite(PWMB, 0);
+  Serial.println("🛑 정지");
+}
+
+void motorForward(int speed) {
+  digitalWrite(AIN1, HIGH); digitalWrite(AIN2, LOW); analogWrite(PWMA, speed);
+  digitalWrite(BIN1, HIGH); digitalWrite(BIN2, LOW); analogWrite(PWMB, speed);
+  Serial.println("⬆️ 전진");
+}
+
+void motorBackward(int speed) {
+  digitalWrite(AIN1, LOW); digitalWrite(AIN2, HIGH); analogWrite(PWMA, speed);
+  digitalWrite(BIN1, LOW); digitalWrite(BIN2, HIGH); analogWrite(PWMB, speed);
+  Serial.println("⬇️ 후진");
+}
+
+void motorLeft(int speed) {
+  digitalWrite(AIN1, LOW); digitalWrite(AIN2, HIGH); analogWrite(PWMA, speed);
+  digitalWrite(BIN1, HIGH); digitalWrite(BIN2, LOW); analogWrite(PWMB, speed);
+  Serial.println("⬅️ 좌회전");
+}
+
+void motorRight(int speed) {
+  digitalWrite(AIN1, HIGH); digitalWrite(AIN2, LOW); analogWrite(PWMA, speed);
+  digitalWrite(BIN1, LOW); digitalWrite(BIN2, HIGH); analogWrite(PWMB, speed);
+  Serial.println("➡️ 우회전");
+}
+
+// ===== 규칙 기반 제스처 판단 =====
+void applyGestureRule() {
+  // 양손 위로 → 정지 (최우선)
+  if (left_az < STOP_AZ && right_az < STOP_AZ) {
+    motorStop();
+    return;
+  }
+
+  // 전진 / 후진 (pitch 기준)
+  if (left_pitch > PITCH_FWD) {
+    motorForward(MOTOR_SPEED);
+  } else if (left_pitch < PITCH_BWD) {
+    motorBackward(MOTOR_SPEED);
+  }
+  // 좌회전 / 우회전 (roll 기준)
+  else if (left_roll < ROLL_LEFT) {
+    motorLeft(MOTOR_SPEED);
+  } else if (left_roll > ROLL_RIGHT) {
+    motorRight(MOTOR_SPEED);
   } else {
-    encoderCount--;
+    motorStop();
+  }
+}
+
+// ===== MQTT 수신 콜백 =====
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  payload[length] = '\0';
+
+  StaticJsonDocument<128> doc;
+  deserializeJson(doc, payload);
+
+  if (String(topic) == "glove/left") {
+    left_pitch = doc["pitch"];
+    left_roll  = doc["roll"];
+    left_az    = doc["az"];
+  } else if (String(topic) == "glove/right") {
+    right_pitch = doc["pitch"];
+    right_roll  = doc["roll"];
+    right_az    = doc["az"];
+  }
+
+  applyGestureRule();
+}
+
+void connectWiFi() {
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500); Serial.print(".");
+  }
+  Serial.println("\n✅ Wi-Fi 연결!");
+}
+
+void connectMQTT() {
+  while (!mqtt.connected()) {
+    if (mqtt.connect("truck")) {
+      mqtt.subscribe("glove/left");
+      mqtt.subscribe("glove/right");
+      Serial.println("✅ MQTT 연결!");
+    } else {
+      delay(2000);
+    }
   }
 }
 
 void setup() {
   Serial.begin(115200);
 
-  // 모터 방향 핀
-  pinMode(BIN1_FR, OUTPUT);
-  pinMode(BIN2_FR, OUTPUT);
+  // 모터 핀 설정
+  pinMode(AIN1, OUTPUT); pinMode(AIN2, OUTPUT); pinMode(PWMA, OUTPUT);
+  pinMode(BIN1, OUTPUT); pinMode(BIN2, OUTPUT); pinMode(PWMB, OUTPUT);
+  motorStop();
 
-  // 인코더 핀
-  pinMode(ENC_A_FR, INPUT);
-  pinMode(ENC_B_FR, INPUT);
-
-  // 인코더 인터럽트 등록
-  attachInterrupt(digitalPinToInterrupt(ENC_A_FR), encoderISR, RISING);
-
-  // PWM 채널 설정
-  ledcSetup(CH_FR, PWM_FREQ, PWM_BIT);
-  ledcAttachPin(PWMB_FR, CH_FR);
-
-  Serial.println("=== 앞R 모터 테스트 시작 ===");
-  delay(1000);
-
-  // ① 전진
-  Serial.println("[1] 전진 2초");
-  encoderCount = 0;
-  digitalWrite(BIN1_FR, HIGH);
-  digitalWrite(BIN2_FR, LOW);
-  ledcWrite(CH_FR, 150);
-  delay(2000);
-
-  ledcWrite(CH_FR, 0);
-  Serial.print("인코더 카운트: ");
-  Serial.println(encoderCount);
-  delay(1000);
-
-  // ② 후진
-  Serial.println("[2] 후진 2초");
-  encoderCount = 0;
-  digitalWrite(BIN1_FR, LOW);
-  digitalWrite(BIN2_FR, HIGH);
-  ledcWrite(CH_FR, 150);
-  delay(2000);
-
-  ledcWrite(CH_FR, 0);
-  Serial.print("인코더 카운트: ");
-  Serial.println(encoderCount);
-  delay(1000);
-
-  // ③ 속도 단계별 테스트
-  Serial.println("[3] 속도 단계별 테스트");
-  digitalWrite(BIN1_FR, HIGH);
-  digitalWrite(BIN2_FR, LOW);
-
-  int speeds[] = {80, 120, 180, 255};
-  for (int i = 0; i < 4; i++) {
-    Serial.print("속도: ");
-    Serial.println(speeds[i]);
-    ledcWrite(CH_FR, speeds[i]);
-    delay(1500);
-  }
-
-  ledcWrite(CH_FR, 0);
-  Serial.println("=== 테스트 완료 ===");
+  connectWiFi();
+  mqtt.setServer(MQTT_BROKER, MQTT_PORT);
+  mqtt.setCallback(mqttCallback);
 }
 
 void loop() {
-  // 시리얼 모니터에서 실시간 인코더 값 확인
-  Serial.print("인코더: ");
-  Serial.println(encoderCount);
-  delay(200);
+  if (!mqtt.connected()) connectMQTT();
+  mqtt.loop();
 }
