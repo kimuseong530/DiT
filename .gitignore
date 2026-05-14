@@ -1,15 +1,58 @@
+# --- 기존 보안 및 하드웨어 설정 ---
 # 보안
 secrets.h
 
-# Unity
-[Ll]ibrary/
-[Tt]emp/
-[Oo]bj/
-[Bb]uild/
-*.meta
-
-# Arduino
+# Arduino & Others
 *.bin
-*.elf.DS_Store
+*.elf
 .pio/
 .DS_Store
+
+# Mac OS 설정
+.DS_Store
+.DS_Store
+
+# --- Unity 설정 (하위 폴더 대응) ---
+# 하위 폴더 어디에 있든 아래 폴더들은 무시합니다.
+**/[Ll]ibrary/
+**/[Tt]emp/
+**/[Oo]bj/
+**/[Bb]uild/
+**/[Bb]uilds/
+**/[Ll]ogs/
+**/[Uu]ser[Ss]ettings/
+
+# 메모리 및 레코딩 파일
+**/[Mm]emoryCaptures/
+**/[Rr]ecordings/
+
+# 에디터 및 프로젝트 파일
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# 빌드 결과물
+*.apk
+*.aab
+*.unitypackage
+*.app
+
+# 라이더/비주얼 스튜디오 관련
+.vs/
+.gradle/
+ExportedObj/
+.consulo/
+*.DotSettings.user
+
+# 크래시 리포트 및 기타
+sysinfo.txt
+mono_crash.*
